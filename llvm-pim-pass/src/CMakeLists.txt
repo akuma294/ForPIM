@@ -1,5 +1,6 @@
 add_library(PIMVectorizationPass MODULE
     PIMVectorizationPass.cpp
+    # PIMVectorizationPass_org.cpp
 )
 
 # LLVM is (typically) built with no C++ RTTI. We need to match that;

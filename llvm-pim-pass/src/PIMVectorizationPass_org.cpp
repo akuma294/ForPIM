@@ -12,7 +12,7 @@
 #include <iostream>
 
 using namespace llvm;
-using namespace std;
+
 namespace
 {
 
@@ -145,77 +145,37 @@ public:
         return changed;
     }
 
+    bool doFinalization(Module &module) override
+    {
+        bool ret = false;
 
-    // -----------------------------------------------
-    // Final cleanup: remove unused PIM functions
-    // -----------------------------------------------
-    bool doFinalization(Module &module) override {
-        bool changed = false;
+        // If we never used a particular PIM function, we might as well remove it again
+        ret = this->removeUnusedPIMFunction(module, PIMAnd) || ret;
+        ret = this->removeUnusedPIMFunction(module, PIMOr)  || ret;
+        ret = this->removeUnusedPIMFunction(module, PIMNot) || ret;
+        ret = this->removeUnusedPIMFunction(module, PIMAdd) || ret;
+        ret = this->removeUnusedPIMFunction(module, PIMSub) || ret;
+        ret = this->removeUnusedPIMFunction(module, PIMMul) || ret;
+        ret = this->removeUnusedPIMFunction(module, PIMDiv) || ret;
 
-        for (const auto &entry : PIMFuncMap)
-        {
-            PIMTypeKey key = entry.first;
-            Function *func = entry.second;
-
-            // Remove function if never used
-            if (!PIMInstrUsedMap[key] && func) {
-                func->removeFromParent();
-                changed = true;
-            }
-        }
-
-        return changed;
+        return ret;
     }
-
-    //final clean up -- remove unused PIM functions
-    // bool doFinalization(Module &module) override
-    // {
-    //     bool ret = false;
-
-    //     // If we never used a particular PIM function, we might as well remove it again
-    //     ret = this->removeUnusedPIMFunction(module, PIMAnd) || ret;
-    //     ret = this->removeUnusedPIMFunction(module, PIMOr)  || ret;
-    //     ret = this->removeUnusedPIMFunction(module, PIMNot) || ret;
-    //     ret = this->removeUnusedPIMFunction(module, PIMAdd) || ret;
-    //     ret = this->removeUnusedPIMFunction(module, PIMSub) || ret;
-    //     ret = this->removeUnusedPIMFunction(module, PIMMul) || ret;
-    //     ret = this->removeUnusedPIMFunction(module, PIMDiv) || ret;
-
-    //     return ret;
-    // }
 
 private:
     bool doInitialization(Module &module) override
     {
         // We don't want to propagate that reference through all functions
         this->currentModule = &module;
-        LLVMContext &context = module.getContext();
-        
-        //cout << "Abh: In %s " << __func__ <<  " " << __LINE__ << "\n";
-        // Add support for both i8 and i32 element types
-        std::vector<Type*> supportedTypes = {
-            Type::getInt8Ty(context),
-            Type::getInt32Ty(context)
-        };
 
         // Create the functions that get called for PIM instructions
-        for (auto *elementType : supportedTypes) {
-            this->createPIMInstr(PIMAnd, elementType);
-            this->createPIMInstr(PIMOr, elementType);
-            this->createPIMInstr(PIMNot, elementType);
-            this->createPIMInstr(PIMAdd, elementType);
-            this->createPIMInstr(PIMSub, elementType);
-            this->createPIMInstr(PIMMul, elementType);
-            this->createPIMInstr(PIMDiv, elementType);
-        }
-        // this->createPIMInstr(PIMAnd);
-        // this->createPIMInstr(PIMOr);
-        // this->createPIMInstr(PIMNot);
-        // this->createPIMInstr(PIMAdd);
-        // this->createPIMInstr(PIMSub);
-        // this->createPIMInstr(PIMMul);
-        // this->createPIMInstr(PIMDiv);
-        //cout << "Abh: In %s " << __func__ <<  " " << __LINE__ << "\n";
+        this->createPIMInstr(PIMAnd);
+        this->createPIMInstr(PIMOr);
+        this->createPIMInstr(PIMNot);
+        this->createPIMInstr(PIMAdd);
+        this->createPIMInstr(PIMSub);
+        this->createPIMInstr(PIMMul);
+        this->createPIMInstr(PIMDiv);
+
         // We changed the module
         return true;
     }
@@ -244,139 +204,55 @@ private:
         }
     }
 
-    // CHANGES:
-    // - getPIMTy(), getPIMPtrTy(), and createPIMInstr() now accept element types.
-    // - PIM function map is now indexed by type + opcode (bitwidth, op).
-    // - createPIMMalloc() and related logic adjusted to support i8 alignment and size.
-    // Key is a pair of (element bit width, instruction type), e.g., <8, PIMAnd>
-    using PIMTypeKey = std::pair<unsigned, PIMInstrType>;
-
-    // Maps a key to the generated PIM function (for different types)
-    std::map<PIMTypeKey, Function*> PIMFuncMap;
-    std::map<PIMTypeKey, bool> PIMInstrUsedMap;
-
-    // -----------------------------------------------
-    // Generic type-aware vector type generator
-    // -----------------------------------------------
-
-    // Returns a <65536 x T> vector type
-    VectorType *getPIMTy(Type *elementType) {
-        return VectorType::get(elementType, PIM_VECTOR_SIZE, false);
-    }
-
-    // Returns pointer type to <65536 x T>
-    PointerType *getPIMPtrTy(Type *elementType) {
-        return PointerType::get(getPIMTy(elementType), this->currentFunction->getAddressSpace());
-    }
-    // -----------------------------------------------
-    // Dynamically creates PIM intrinsic functions for specific type and op
-    // -----------------------------------------------
-    void createPIMInstr(PIMInstrType instrType, Type *elementType){
+    // Add a global PIM function that we can call
+    void createPIMInstr(PIMInstrType instrType)
+    {
         LLVMContext &context = this->currentModule->getContext();
         const int argCount = this->PIMInstrArgCount[instrType];
 
-        // Build function arg type list: op1, op2, dst (all ptr to vector)
-        //cout << "Abh: In %s " << __func__ <<  " " << __LINE__ << "\n";
-        VectorType *vecTy = getPIMTy(elementType);
-        PointerType *arg_type = PointerType::getUnqual(vecTy);
-        std::vector<Type*> arg_types(argCount + 1, arg_type);
+        // The arguments of the function are op1, op2 and dst, all int pointers
+        auto *arg_type = PointerType::getUnqual(VectorType::get(Type::getInt32Ty(context), PIM_VECTOR_SIZE, false));
+        std::vector<Type*> arg_types;
+        arg_types.assign(argCount + 1, arg_type);
 
-        // Build function type and name, e.g., __llvm_PIM_8_and or __llvm_PIM_32_add
-        //cout << "Abh: In %s " << __func__ <<  " " << __LINE__ << "\n";
-        FunctionType *functype = FunctionType::get(Type::getVoidTy(context) , arg_types, false);
-        std::string fname = "__llvm_PIM_" + std::to_string(elementType->getIntegerBitWidth()) + "_" + this->PIMInstrName[instrType].substr(11);
+        // Create the function prototype
+        auto functype = FunctionType::get(Type::getVoidTy(context), arg_types, false);
 
-        // Create function and set no-inline attributes
-        //cout << "Abh: In %s " << __func__ <<  " " << __LINE__ << "\n";
-        Function *F = Function::Create(functype, Function::LinkOnceODRLinkage, fname, this->currentModule);
-        F->addFnAttr(Attribute::NoInline);
-        F->addFnAttr(Attribute::OptimizeNone);
-        F->addFnAttr(Attribute::NoUnwind);
+        // Add the function
+        this->PIMFunc[instrType] = Function::Create(functype,
+                                                    Function::LinkOnceODRLinkage,
+                                                    this->PIMInstrName[instrType],
+                                                    this->currentModule);
 
-        // Build function body: emit inline ASM with custom opcode
-        //cout << "Abh: In %s " << __func__ <<  " " << __LINE__ << "\n";
-        BasicBlock *block = BasicBlock::Create(context, "entry", F);
-        IRBuilder<> builder(block);
+        // Try very hard to not get that function optimized away
+        this->PIMFunc[instrType]->addFnAttr(Attribute::NoInline);
+        this->PIMFunc[instrType]->addFnAttr(Attribute::OptimizeNone);
+        this->PIMFunc[instrType]->addFnAttr(Attribute::NoUnwind);
 
-        // Collect arguments for call
-        //cout << "Abh: In %s " << __func__ <<  " " << __LINE__ << "\n";
+        // Add a basic block to the body of our function
+        BasicBlock* block = BasicBlock::Create(context, "entry", this->PIMFunc[instrType]);
+
+        // Construct the arguments to the asm call
         std::vector<Value*> args;
-        for (auto &arg : F->args()) args.push_back(&arg);
+        args.reserve(argCount + 1);
+        for (int i = 0; i < argCount + 1; i++)
+            args.push_back(this->PIMFunc[instrType]->getArg(i));
 
-        // Define inline asm constraints: one write target (=*m), rest are inputs (*m)
-        //cout << "Abh: In %s " << __func__ <<  " " << __LINE__ << "\n";
+        // Construct the asm constraints
         std::string asmConstraints = "=*m";
-        for (int i = 0; i < argCount; i++) asmConstraints.append(",*m");
+        for (int i = 0; i < argCount; i++)
+            asmConstraints.append(",*m");
 
-        // Create inline asm and emit call
-        //cout << "Abh: In %s " << __func__ <<  " " << __LINE__ << "\n";
-        FunctionType *asm_func_type = FunctionType::get(arg_type, arg_types, false);
-        InlineAsm *asm_code = InlineAsm::get(asm_func_type,
-            ".byte 0x0F, 0x04;\n"
-            ".word " + this->PIMInstrOpcode[instrType] + ";",
-            asmConstraints, true);
-
-        builder.CreateCall(asm_func_type, asm_code, args);
+        // Add the PIM instructions to the body of the function
+        IRBuilder<> builder(block);
+        auto *asm_func_type = FunctionType::get(arg_type, arg_types, false);
+        auto *asm_code = InlineAsm::get(asm_func_type,
+                                        ".byte 0x0F, 0x04;\n"
+                                        ".word " + this->PIMInstrOpcode[instrType] + ";",
+                                        asmConstraints, true);
+        builder.CreateCall(asm_func_type, asm_code, args, this->PIMInstrName[instrType] + "_asm");
         builder.CreateRetVoid();
-
-        // Register the function into maps for lookup
-        // Register the function into maps for lookup
-        //cout << "Abh: In %s " << __func__ <<  " " << __LINE__ << "\n";
-        PIMFuncMap[{elementType->getIntegerBitWidth(), instrType}] = F;
-        PIMInstrUsedMap[{elementType->getIntegerBitWidth(), instrType}] = false;
-
-        //cout << "Abh: In %s " << __func__ <<  " " << __LINE__ << "\n";
     }
-
-    // Add a global PIM function that we can call
-    // void createPIMInstr(PIMInstrType instrType)
-    // {
-    //     LLVMContext &context = this->currentModule->getContext();
-    //     const int argCount = this->PIMInstrArgCount[instrType];
-
-    //     // The arguments of the function are op1, op2 and dst, all int pointers
-    //     auto *arg_type = PointerType::getUnqual(VectorType::get(Type::getInt32Ty(context), PIM_VECTOR_SIZE, false));
-    //     std::vector<Type*> arg_types;
-    //     arg_types.assign(argCount + 1, arg_type);
-
-    //     // Create the function prototype
-    //     auto functype = FunctionType::get(Type::getVoidTy(context), arg_types, false);
-
-    //     // Add the function
-    //     this->PIMFunc[instrType] = Function::Create(functype,
-    //                                                 Function::LinkOnceODRLinkage,
-    //                                                 this->PIMInstrName[instrType],
-    //                                                 this->currentModule);
-
-    //     // Try very hard to not get that function optimized away
-    //     this->PIMFunc[instrType]->addFnAttr(Attribute::NoInline);
-    //     this->PIMFunc[instrType]->addFnAttr(Attribute::OptimizeNone);
-    //     this->PIMFunc[instrType]->addFnAttr(Attribute::NoUnwind);
-
-    //     // Add a basic block to the body of our function
-    //     BasicBlock* block = BasicBlock::Create(context, "entry", this->PIMFunc[instrType]);
-
-    //     // Construct the arguments to the asm call
-    //     std::vector<Value*> args;
-    //     args.reserve(argCount + 1);
-    //     for (int i = 0; i < argCount + 1; i++)
-    //         args.push_back(this->PIMFunc[instrType]->getArg(i));
-
-    //     // Construct the asm constraints
-    //     std::string asmConstraints = "=*m";
-    //     for (int i = 0; i < argCount; i++)
-    //         asmConstraints.append(",*m");
-
-    //     // Add the PIM instructions to the body of the function
-    //     IRBuilder<> builder(block);
-    //     auto *asm_func_type = FunctionType::get(arg_type, arg_types, false);
-    //     auto *asm_code = InlineAsm::get(asm_func_type,
-    //                                     ".byte 0x0F, 0x04;\n"
-    //                                     ".word " + this->PIMInstrOpcode[instrType] + ";",
-    //                                     asmConstraints, true);
-    //     builder.CreateCall(asm_func_type, asm_code, args, this->PIMInstrName[instrType] + "_asm");
-    //     builder.CreateRetVoid();
-    // }
 
     void scanForPIMInstruction(Instruction &instr)
     {
@@ -1182,16 +1058,8 @@ private:
             if (node.op2 != nullptr)
                 args.push_back(node.op2->dest);
 
-            // CallInst *call = CallInst::Create(this->PIMFunc[instrType], args);
-            unsigned bitwidth = node.instr->getType()->getScalarSizeInBits();
-            Function *pimFunc = PIMFuncMap[{bitwidth, instrType}];
-            
-            if (!pimFunc) {
-                errs() << "Error: Missing PIM function for bitwidth " << bitwidth << ", instrType " << instrType << "\n";
-                return;
-            }
-            
-            CallInst *call = CallInst::Create(pimFunc->getFunctionType(), pimFunc, args);
+            CallInst *call = CallInst::Create(this->PIMFunc[instrType], args);
+
             // Replace the instruction
             this->instrInsertList.emplace_back(node.pos, call);
             this->instrDelList.emplace(node.instr);
