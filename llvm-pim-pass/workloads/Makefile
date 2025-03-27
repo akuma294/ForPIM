@@ -12,12 +12,18 @@ all: ${BINS}
 	${CLANG} -emit-llvm -g -O3 -fno-unroll-loops -mllvm -force-vector-width=${WIDTH} -I../include -o "debug/$@.bc" -c "$<"
 	${DIS} "debug/$@.bc" -o "debug/$@.ll"
 
+	# Compile assembly files -- Abhinav
+	# ${CLANG} -c m5op_x86.S rowop.S
+
 	# Run the pass
 	${OPT} -load ../cmake-build-debug/src/libPIMVectorizationPass.so -pim < "debug/$@.bc" > "debug/$@.pim.bc"
 
 	# Compile the result of the pass
 	${DIS} "debug/$@.pim.bc" -o "debug/$@.pim.ll"
-	${CLANG} -O0 -g -o "$@" "debug/$@.pim.bc"
+	${CLANG} -O0 -g -static -o "$@" "debug/$@.pim.bc"
+	# ${CLANG} -O0 -g -o "$@" "debug/$@.pim.bc"
+
+	# ${CLANG} -O0 -g -static -o "$@" "debug/$@.pim.bc" m5op_x86.o rowop.o
 
 clean:
-	rm -f ${BINS} debug/*
+	rm -f ${BINS} debug/* *.o

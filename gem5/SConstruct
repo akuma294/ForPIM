@@ -552,6 +552,7 @@ if main['GCC'] + main['CLANG'] > 1:
 if main['GCC'] or main['CLANG']:
     # As gcc and clang share many flags, do the common parts here
     main.Append(CCFLAGS=['-pipe'])
+    main.Append(CCFLAGS=['-DPROTOBUF_INLINE_NOT_IN_HEADERS=0'])
     main.Append(CCFLAGS=['-fno-strict-aliasing'])
     # Enable -Wall and then disable the few warnings that we
     # consistently violate
