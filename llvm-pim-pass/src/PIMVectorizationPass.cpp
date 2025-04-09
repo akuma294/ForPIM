@@ -22,7 +22,7 @@ public:
     static char ID;
 
 private:
-    static const int PIM_VECTOR_SIZE = 65536;
+    static const int PIM_VECTOR_SIZE = 8192;
     static const int MAX_TRANSP_SEARCH_DEPTH = 100;
     static const int MEMALIGN_TYPE_COUNT = 4;
 
